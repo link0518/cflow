@@ -29,12 +29,16 @@ import 'dayjs/locale/zh-cn'
 
 const listItemSymbolList = ["- [ ] ", "- [x] ", "* ", "- "];
 const emptyOlReg = /^(\d+)\. $/;
-const listItemReg = /^( *)([-|\*]) (.*)/;
+const listItemReg = /^( *)([-\*]) (.*)/;
 const orderItemReg = /^( *)(\d+)\. (.*)/;
 
 const CustomIcon = ({ name }: { name: string }) => {
   const LucideIcon = (Icon.icons as { [key: string]: any })[name];
-  return <LucideIcon className="w-5 h-5 mx-auto" />;
+  if (!LucideIcon) {
+      console.error(`Icon with name "${name}" does not exist.`);
+      return null;
+  }
+  return <LucideIcon className="w-4 h-auto mr-2" />;
 };
 
 const cal_valid_word_cnt = (content: string) => {
@@ -157,6 +161,8 @@ const MemoEditor = (props: Props) => {
   const paste_file_rename = userSetting?.pasteRename ?? false;
   const show_tag_selector = userSetting?.showTagSelector ?? true;
   const show_memo_public = userSetting?.showMemoPublic ?? false;
+  const hide_mark_block = userSetting?.hideMarkBlock ?? false;
+  const hide_full_screen = userSetting?.hideFullScreen ?? false;
 
   const [word_cnt, set_word_cnt] = useState(0);
   const show_word_cnt = userSetting.showWordCnt;
@@ -372,6 +378,10 @@ const MemoEditor = (props: Props) => {
           editorRef.current.insertText(tabSpace);
           editorRef.current.setCursorPosition(cursorPosition + TAB_SPACE_WIDTH);
           return
+        } else {
+          editorRef.current.setCursorPosition(cursorPosition - rowValue.length);
+          editorRef.current.insertText(tabSpace);
+          editorRef.current.setCursorPosition(cursorPosition + TAB_SPACE_WIDTH);
         }
       }
     }
@@ -439,6 +449,13 @@ const MemoEditor = (props: Props) => {
         if (spaces.length >= TAB_SPACE_WIDTH) {
           editorRef.current.removeText(cursorPosition - rowValue.length, TAB_SPACE_WIDTH);
           editorRef.current.setCursorPosition(cursorPosition - TAB_SPACE_WIDTH);
+        }
+      } else {
+        const space_before = cur_line_content.match(/^( *)/);
+        const space_cnt = space_before ? space_before[1].length : 0;
+        const del_space_number = Math.min(4, space_cnt);
+        if (del_space_number) {
+          editorRef.current.removeText(cursorPosition - rowValue.length, del_space_number);
         }
       }
     }
@@ -601,55 +618,80 @@ const MemoEditor = (props: Props) => {
     let new_content: String[] = []
     const line_list = content.split("\n")
     let last_idx_dict : { [key: number]: number } = {}
-    let last_lv = 0
+    let normal_line_appear = false
+    let code_block_appear = false
     const number_regexp = /^( *)(\d+)\. (.*)$/
-    const list_regexp = /^( *)([-|\*]) (.*)$/
+    const list_regexp = /^( *)([-\*]) (.*)$/
+    const code_block_regexp = /^( *)(```)(.*)$/
 
     let cursor_line = editorRef.current?.getCursorLineNumber();
     if (cursor_line == null) {
       return
     }
+    let cursorPosition = editorRef.current?.getCursorPosition();
+    if (cursorPosition == null) {
+      return
+    }
 
     for (let i = 0; i < line_list.length; i++) {
+      const match_code_block = line_list[i].match(code_block_regexp)
+      if (match_code_block) {
+        code_block_appear = !code_block_appear
+      }
+      if (code_block_appear) {
+        new_content.push(line_list[i])
+        continue
+      }
       const match = line_list[i].match(number_regexp)
       const match_list = line_list[i].match(list_regexp)
       if (!match && !match_list) {
-        last_idx_dict[last_lv] = 0
         new_content.push(line_list[i])
-        for (let key in last_idx_dict) {
-          delete last_idx_dict[key]
-        }
+        normal_line_appear = true
         continue
       }
       if (match) {
         const number = parseInt(match[2])
         const lv = match[1].length/TAB_SPACE_WIDTH
         const last_idx = last_idx_dict[lv] || 0
-        if (last_idx == 9999) {
+        if (last_idx == 9999 && !normal_line_appear) {
           new_content.push(match[1] + "- " + match[3])
           last_idx_dict[lv] = 9999
+          if (i <= cursor_line) {
+            cursorPosition -= number.toString().length
+          }
         }
-        else if (number == last_idx + 1) {
+        else if (number == last_idx + 1 || number == 1) {
           new_content.push(line_list[i])
           last_idx_dict[lv] = number
         }
-        else {
+        else if (!normal_line_appear) {
           new_content.push(match[1] + (last_idx + 1).toString() + ". " + match[3])
           last_idx_dict[lv] = last_idx + 1
+          if (i <= cursor_line) {
+            cursorPosition += (last_idx + 1).toString().length - number.toString().length
+          }
+        } else {
+          new_content.push(match[1] +  "1. " + match[3])
+          last_idx_dict[lv] = 1
+          if (i <= cursor_line) {
+            cursorPosition += 1 - number.toString().length
+          }
         }
         for (let key in last_idx_dict) {
           if (parseInt(key) > lv) {
             delete last_idx_dict[key]
           }
         }
-      }
-      else if (match_list) {
+      } else if (match_list) {
         const lv = match_list[1].length/TAB_SPACE_WIDTH
         const last_idx = last_idx_dict[lv]
-        if (last_idx != undefined && last_idx != 9999)
+        if (last_idx != undefined && last_idx != 9999 && !normal_line_appear)
         {
           new_content.push(match_list[1] + (last_idx + 1).toString() + ". " + match_list[3])
           last_idx_dict[lv] = last_idx + 1
+          if (i <= cursor_line) {
+            cursorPosition += (last_idx + 1).toString().length
+          }
         }
         else {
           new_content.push(line_list[i])
@@ -661,10 +703,12 @@ const MemoEditor = (props: Props) => {
           }
         }
       }
+      normal_line_appear = false
     }
     const new_content_str = new_content.join("\n")
     if (new_content_str != content) {
       editorRef.current?.setContent(new_content_str)
+      editorRef.current?.setCursorPosition(cursorPosition);
     }
   }
 
@@ -793,7 +837,8 @@ const MemoEditor = (props: Props) => {
       };
     });
 
-    const matchedNodes = getMatchedNodes(content);
+    const no_code_block_content = content.replace(/```.*?```/gs, "");
+    const matchedNodes = getMatchedNodes(no_code_block_content);
     const tagNameList = uniq(matchedNodes.filter((node) => node.parserName === "tag").map((node) => node.matchedContent.slice(1)));
     for (const tagName of tagNameList) {
       await tagStore.upsertTag(tagName);
@@ -1024,6 +1069,9 @@ const MemoEditor = (props: Props) => {
         shortcut = "\n" + shortcut.slice(1);
       }
     }
+    if (shortcut.startsWith("\\^")) {
+      shortcut = shortcut.slice(1);
+    }
     if (shortcut.includes("$CURSOR$")) {
       const cursor_pos = shortcut.indexOf("$CURSOR$")
       shortcut = shortcut.replace("$CURSOR$", "")
@@ -1101,9 +1149,9 @@ const MemoEditor = (props: Props) => {
       <div className="relative w-full flex flex-row justify-between items-center pt-2 z-1">
         <div className="flex flex-row justify-start items-center">
           {show_tag_selector && <TagSelector onTagSelectorClick={(tag) => handleTagSelectorClick(tag)} fullScreen={state.fullscreen}/>}
-          <IconButton className="flex flex-row justify-center items-center p-1 w-auto h-auto mr-1 select-none rounded cursor-pointer text-gray-600 hover:bg-gray-300 hover:shadow">
+          {!hide_mark_block && <IconButton className="flex flex-row justify-center items-center p-1 w-auto h-auto mr-1 select-none rounded cursor-pointer text-gray-600 hover:bg-gray-300 hover:shadow">
             <Icon.Link className="w-5 h-5 mx-auto" onClick={handleMarkBtnClick}/>
-          </IconButton>
+          </IconButton>}
           <IconButton className="md:!hidden flex flex-row justify-center items-center p-1 w-auto h-auto mr-1 select-none rounded cursor-pointer text-gray-600 hover:bg-gray-300 hover:shadow">
             <Icon.ArrowRightFromLine className="w-5 h-5 mx-auto" onClick={handleIndent}/>
           </IconButton>
@@ -1125,15 +1173,15 @@ const MemoEditor = (props: Props) => {
             })
           }
           <InputActionSelector onActionSelectorClick={(action) => handleInputActionClick(action)} fullScreen={state.fullscreen} />
-          <IconButton className="flex flex-row justify-center items-center p-1 w-auto h-auto mr-1 select-none rounded cursor-pointer text-gray-600 hover:bg-gray-300 hover:shadow" >
+          <IconButton className="cflow_upload_icon flex flex-row justify-center items-center p-1 w-auto h-auto mr-1 select-none rounded cursor-pointer text-gray-600 hover:bg-gray-300 hover:shadow" >
             <Icon.Image className="w-5 h-5 mx-auto" onClick={handleUploadFileBtnClick} />
           </IconButton>
           {use_excalidraw && <IconButton className="flex flex-row justify-center items-center p-1 w-auto h-auto mr-1 select-none rounded cursor-pointer text-gray-600 hover:bg-gray-300 hover:shadow" >
             <Icon.Spline className="w-5 h-5 mx-auto" onClick={handleExcalidrawClick} />
           </IconButton>}
-          <IconButton className="action-btn">
+          {!hide_full_screen && <IconButton className="action-btn">
             {state.fullscreen ? <Icon.Minimize className="w-5 h-5 mx-auto"  onClick={handleFullscreenBtnClick}/> : <Icon.Maximize className="w-5 h-5 mx-auto"  onClick={handleFullscreenBtnClick}/>}
-          </IconButton>
+          </IconButton>}
           {has_modify && (
             <>
               <IconButton className={`flex flex-row justify-center items-center p-1 w-auto h-auto mr-1 select-none rounded cursor-pointer hover:bg-gray-300 hover:shadow ${!has_modify ? 'hidden' : ''}`} style={{ color: "#CC0000" }} >

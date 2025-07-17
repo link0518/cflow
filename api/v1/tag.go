@@ -255,7 +255,7 @@ func convertTagFromStore(tag *store.Tag) *Tag {
 	}
 }
 
-var tagRegexp = regexp.MustCompile(`#([^\s#,]+)`)
+var tagRegexp = regexp.MustCompile(`#([^\s#,\.]+)`)
 
 func findTagListFromMemoContent(memoContent string) []string {
 	tagMapSet := createMemoTagMapSet(memoContent)
@@ -269,6 +269,9 @@ func findTagListFromMemoContent(memoContent string) []string {
 }
 
 func createMemoTagMapSet(memoContent string) map[string]bool {
+	codeBlockRegex := regexp.MustCompile("(?s)```.*?```")
+	memoContent = codeBlockRegex.ReplaceAllString(memoContent, "")
+
 	tagMapSet := make(map[string]bool)
 	matches := tagRegexp.FindAllStringSubmatch(memoContent, -1)
 	for _, v := range matches {
